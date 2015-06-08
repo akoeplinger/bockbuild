@@ -161,7 +161,10 @@ class GtkPackage (GnomeGitPackage):
 				# from Xamarin.Mac and GTK is eating them. If a better solution is found
 				# we should remove this.
 				# https://bugzilla.xamarin.com/show_bug.cgi?id=29301
-				'patches/gtk/gtk-yield-mouse-events-to-cocoa.patch'
+				'patches/gtk/gtk-yield-mouse-events-to-cocoa.patch',
+
+				# https://bugzilla.xamarin.com/show_bug.cgi?id=29301#c3
+				'patches/gtk/gtknsview-fix-invalid-casts.patch'
 			])
 
 	def prep (self):
