@@ -12,7 +12,8 @@ class MonoMasterPackage(Package):
 			revision = os.getenv('MONO_BUILD_REVISION'),
 			configure_flags = [
 				'--enable-nls=no',
-				'--with-ikvm=yes'
+				'--with-ikvm=yes',
+				'--with-cooperative-gc=yes'
 			]
 		)
 		#This package would like to be lipoed.
