@@ -34,10 +34,14 @@ class config:
 class CommandException (Exception): # shell command failure
 	def __init__ (self, message):
 		Exception.__init__ (self, message)
+		message = '%s\n%s' % (message, get_caller (get_dump = True))
+		print message
 
 class BockbuildException (Exception): # internal/unexpected issue, treat as unrecoverable
 	def __init__ (self, message):
 		Exception.__init__ (self, message)
+		message = '%s\n%s' % (message, get_caller (get_dump = True))
+		print message
 
 def log (phase, message):
 	#DISABLED until we can properly refactor/redirect logging
@@ -45,24 +49,49 @@ def log (phase, message):
 
 #TODO: move these functions to either Profile or their own class
 
-def get_caller (skip = 0):
-	try:
-		stack = inspect.stack ()
-		if len (inspect.stack()) < 3 + skip:
-			return 'top'
-		record = stack [2 + skip]
+def get_caller (skip = 0, get_dump = False):
+
+	stack = inspect.stack (3)
+	if len (inspect.stack()) < 3 + skip:
+		return 'top'
+	output = None
+	last_caller = None
+	for record in stack [2 + skip:]:
 		caller = record[3]
 		frame = record[0]
 
-		if 'self' in frame.f_locals:
-			try:
-				return '%s->%s' % (frame.f_locals['self'].name, caller)
-			except Exception as e:
-				return '%s->%s' % (frame.f_locals['self'].__class__.__name__, caller)
-		else:
-			return caller
-	except Exception as e:
-		return '~error getting caller~'
+		try:
+			if 'self' in frame.f_locals:
+				try:
+					output = '%s->%s' % (frame.f_locals['self'].name, caller)
+				except Exception as e:
+					pass
+				finally:
+					if output == None:
+						output = '%s->%s' % (frame.f_locals['self'].__class__.__name__, caller)
+			else:
+				last_caller = caller
+			if get_dump:
+				output = output + "\n" + "\t".join(dump (frame.f_locals['self'], 'self'))
+
+		except Exception as e:
+			pass
+		if output != None:
+			return output
+
+	if output == None:
+		return last_caller
+
+def is_newer (files, their_file):
+	if not os.path.exists (their_file):
+		return False
+
+	mtime = os.path.getmtime(their_file)
+	for file in files:
+		if os.path.getmtime(file) > mtime:
+			return True
+	return False
+
 
 def assert_exists (path):
 	if not os.path.exists (path):
@@ -100,10 +129,19 @@ def progress (message):
 def warn (message):
 	logprint ('(bockbuild warning) %s: %s' % (get_caller (), message), bcolors.UNDERLINE)
 
-def error (message):
+def error (message, more_output = False):
+	def expand (message):
+			for k in message.keys ():
+				if isinstance (message [k], (str, list, tuple, dict, bool, int)) and not k.startswith ('_'):
+					yield '%s: %s\n' % (k, message [k])
+
+	if isinstance (message, dict):
+		message = "\n".join (expand (message))	
 	config.trace = False
-	logprint ('(bockbuild error) %s: %s' % (get_caller (), message) , bcolors.FAIL, summary = True)
-	sys.exit (255)
+	header = '(bockbuild error)' if not more_output else ''
+	logprint ('%s %s: %s' % (header, get_caller (), message) , bcolors.FAIL, summary = True)
+	if not more_output:		
+		sys.exit (255)
 
 def trace (message, skip = 0):
 	if config.trace == False:
@@ -253,6 +291,8 @@ def delete (path):
 				raise # It's still there, so we try again
 
 	retry (rmtree, tries = 5, delay = 1)
+
+
 
 def merge_trees(src, dst, delete_src = True):
 	if not os.path.isdir(src) or not os.path.isdir(dst):

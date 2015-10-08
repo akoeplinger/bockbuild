@@ -6,15 +6,14 @@ from environment import Environment
 from bockbuild.package import *
 import collections
 import hashlib
+import sys
+import traceback
+
 
 class Profile:
-	def __init__ (self, prefix = False):
-		self.name = 'bockbuild'
-		self.root = os.getcwd ()
-		self.resource_root = os.path.realpath (os.path.join('..', '..', 'packages'))
+	def __init__ (self, root = None, prefix = False):		
 		self.build_root = os.path.join (self.root, 'build-root')
 		self.staged_prefix = os.path.join (self.root, 'stage-root')
-		self.toolchain_root = os.path.join (self.root, 'toolchain-root')
 		self.package_root = os.path.join (self.root, 'package-root')
 		self.prefix = prefix if prefix else os.path.join (self.root, 'install-root')
                 self.source_cache = os.getenv('BOCKBUILD_SOURCE_CACHE') or os.path.realpath (os.path.join (self.root, 'cache'))
@@ -22,27 +21,15 @@ class Profile:
 		self.host = get_host ()
 		self.uname = backtick ('uname -a')
 
-		self.env = Environment (self)
+		
 		self.env.set ('BUILD_PREFIX', '%{prefix}')
 		self.env.set ('BUILD_ARCH', '%{arch}')
 		self.env.set ('BOCKBUILD_ENV', '1')
 
 		self.profile_name = self.__class__.__name__
 
-		find_git (self)
-		self.env.set ('bockbuild_revision', git_get_revision(self) )
-
-		loginit ('bockbuild rev. %s %s' % (self.env.bockbuild_revision, "" or "(branch: %s)" % git_get_branch(self)))
-		info ('cmd: %s' % ' '.join(sys.argv))
-
 		self.parse_options ()
-
-		self.packages_to_build = self.cmd_args or self.packages
-		self.verbose = self.cmd_options.verbose
-		self.run_phases = self.default_run_phases
-		self.arch = self.cmd_options.arch
-		self.unsafe = self.cmd_options.unsafe
-
+		
 		Package.profile = self
 
 	def parse_options (self):
@@ -100,51 +87,9 @@ class Profile:
 			action = 'store_true', dest = 'unsafe',
 			help = 'Prevents full rebuilds when a build environment change is detected. Useful for debugging.')
 
-		self.parser = parser
-		self.cmd_options, self.cmd_args = parser.parse_args ()
-
-	def make_package (self, output_dir):
-		sys.exit ("Package support not implemented for this profile")
-
-	def bundle (self, output_dir):
-		sys.exit ('Bundle support not implemented for this profile')
+		self.parser = parser		
 
 	def build (self):
-		if self.cmd_options.dump_environment:
-			self.env.compile ()
-			self.env.dump ()
-			sys.exit (0)
-
-		if self.cmd_options.dump_environment_csproj:
-			# specify to use our GAC, else MonoDevelop would
-			# use its own 
-			self.env.set ('MONO_GAC_PREFIX', self.staged_prefix)
-
-			self.env.compile ()
-			self.env.dump_csproj ()
-			sys.exit (0)
-
-		if self.cmd_options.csproj_file is not None:
-			self.env.set ('MONO_GAC_PREFIX', self.staged_prefix)
-			self.env.compile ()
-			self.env.write_csproj (self.cmd_options.csproj_file)
-			sys.exit (0)
-
-		if not self.cmd_options.include_run_phases == []:
-			self.run_phases = self.cmd_options.include_run_phases
-		for exclude_phase in self.cmd_options.exclude_run_phases:
-			self.run_phases.remove (exclude_phase)
-		if self.cmd_options.only_sources:
-			self.run_phases = []
-
-		for phase_set in [self.run_phases,
-			self.cmd_options.include_run_phases, self.cmd_options.exclude_run_phases]:
-			for phase in phase_set:
-				if phase not in self.default_run_phases:
-					sys.exit ('Invalid run phase \'%s\'' % phase)
-
-		log (0, 'Loaded profile \'%s\' (arch: %s)' % (self.name, self.arch))
-		log (0, 'Setting environment variables')
 
 		Profile.setup (self)
 		self.setup ()
@@ -163,21 +108,11 @@ class Profile:
 			self.shell ()
 
 		if self.cmd_options.do_build:
-
 			ensure_dir (self.staged_prefix, True)
-			ensure_dir (self.toolchain_root, True)
-
-			title ('Building toolchain')
-			for package in self.toolchain_packages.values ():
-				package.staged_profile = self.toolchain_root
-				package.package_prefix = self.toolchain_root
-				package.start_build ('darwin-32')
 
 			title ('Building release')
 			for package in self.release_packages.values ():
-				package.staged_profile = self.staged_prefix
-				package.package_prefix = self.prefix
-				package.start_build (self.arch)
+				package.start_build (self.staged_prefix, self.prefix)
 
 		if self.cmd_options.do_bundle:
 			if not self.cmd_options.output_dir == None:
@@ -193,6 +128,7 @@ class Profile:
 			ensure_dir (self.package_root, True)
 
 			run_shell('rsync -aPq %s/* %s' % (self.staged_prefix, self.package_root), False)
+			unprotect_dir (self.package_root)
 
 			self.process_release (self.package_root)
 			self.package ()
@@ -217,30 +153,46 @@ class Profile:
 
 	def setup (self):
 		progress ('Setting up packages')
+
+		self.cmd_options, self.cmd_args = self.parser.parse_args ()
+
+		exp_list = None
+		if '->' in self.cmd_args: # "... [package name]" will include all packages up to package name
+			assert len (self.cmd_args) == 2
+			found = False
+			exp_list = list()
+			for source in self.packages:
+				exp_list.append (source)
+				if source == self.cmd_args[1]:
+					found = True
+					break
+			assert found
+
+		self.packages_to_build = exp_list or self.cmd_args or self.packages
+
+		info ('packages: ' + str(self.packages_to_build))
+
+		self.verbose = self.cmd_options.verbose
+		self.run_phases = self.default_run_phases
+		self.arch = self.cmd_options.arch
+		self.unsafe = self.cmd_options.unsafe
+
 		ensure_dir (self.source_cache, False)
 		ensure_dir (self.build_root, False)
 
-		self.toolchain_packages = collections.OrderedDict()
 		self.release_packages = collections.OrderedDict()
 
 		for source in self.packages_to_build:
-			package = self.load_package (source)
+			package = self.load_package (source, self.build_root, self.resource_root)
 			trace (package)
+			self.release_packages[package.name] = package
 
-			Profile.setup_package (self, package)
-			Profile.fetch_package (self, package)
-
-			if package.build_dependency:
-				self.toolchain_packages[package.name] = package
-			else:
-				self.release_packages[package.name] = package
-
-	def load_package (self, source):
+	def load_package (self, source, build_root, resource_root):
 		if isinstance (source, Package): # package can already be loaded in the source list
 			return source
 
 		if not os.path.isabs (source):
-			fullpath = os.path.join (self.resource_root, source + '.py')
+			fullpath = os.path.join (resource_root, source + '.py')
 		else:
 			fullpath = source
 
@@ -256,29 +208,13 @@ class Profile:
 
 		new_package = Package.last_instance
 		new_package._path = fullpath
+
+		new_package.setup (build_root, resource_root)
+
+		if is_newer (fullpath, new_package.build_artifact):
+			new_package.mark_updated ('Manifest: %s' % source)
+
 		return new_package
-
-	def fetch_package (self, package):
-		clean_func = None
-		def fetch ():
-			return package._fetch_sources (self.build_root,
-				package.workspace, self.resource_root, self.source_cache)
-
-		clean_func = retry(fetch)
-		package.clean = clean_func
-
-	def setup_package (self, package):
-		if package.build_dependency == True:
-			package.staged_profile = self.toolchain_root
-			package.package_prefix = self.toolchain_root
-		else:
-			package.staged_profile = self.staged_prefix
-			package.package_prefix = self.prefix
-
-		expand_macros (package.sources, package)
-		package.source_dir_name = expand_macros (package.source_dir_name, package)
-		package.workspace = os.path.join (self.build_root, package.source_dir_name)
-		package.build_artifact = os.path.join (self.build_root, package.name + '.artifact')
 
 	class FileProcessor (object):
 		def __init__ (self, harness = None, match = None, process = None,  extra_files = None):
@@ -333,11 +269,34 @@ class Profile:
 			proc.harness = None
 			proc.files = []
 
+import importlib
 
 class Bockbuild:
-	def main ():
-		profile.prep_options ()
-		profile.build ()
-		profile.package ()
+	def __init__ (self, root):
+		self.name = 'bockbuild'
+		self.root = root
+		self.env = Environment (self)
+		find_git (self)
+		self.env.set ('bockbuild_revision', git_get_revision(self))
+		Profile.env = self.env
 
+		loginit ('bockbuild rev. %s %s' % (self.env.bockbuild_revision, "" or "(branch: %s)" % git_get_branch(self)))
+		info ('cmd: %s' % ' '.join(sys.argv))
+
+	def run (self, profile, work_dir):
+		while True:
+			try:
+				self.profile_name = profile.__name__
+				info ('profile: %s' % self.profile_name)
+				self.profile = profile ()
+				self.profile.root = work_dir
+				self.profile.resource_root = os.path.join (self.root, 'packages')
+				self.profile.build ()
+			except Exception as e:
+			        exc_type, exc_value, exc_traceback = sys.exc_info()
+			        error ('%s (%s)' % (e ,exc_type.__name__), more_output = True)
+			        error ('\n'.join (('%s:%s @%s\n\t...%s\n' % p for p in traceback.extract_tb(exc_traceback)[-3:])), more_output = True)
+
+			raw_input("Press Enter to update...")
+			# reload ('bockbuild.profile')
 

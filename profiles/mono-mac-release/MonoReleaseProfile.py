@@ -8,8 +8,8 @@ import tempfile
 import subprocess
 import stat
 
-if __name__ == "__main__":
-        sys.path.append('../..')
+#if __name__ == "__main__":
+#        sys.path.append('../..')
 
 from bockbuild.darwinprofile import DarwinProfile
 from bockbuild.util.util import *
@@ -18,20 +18,10 @@ from glob import glob
 
 class MonoReleaseProfile(DarwinProfile):
     
-    # Toolchain
-    # package order is very important.
-    # autoconf and automake don't depend on CC
-    # ccache uses a different CC since it's not installed yet
-    # every thing after ccache needs a working ccache
-
     packages = [
         'autoconf',
         'automake',
-        'ccache',
         'libtool',
-        'xz',
-        'tar',
-        'gettext',
         'pkg-config',
 
     # needed to autogen gtk+
@@ -107,6 +97,7 @@ class MonoReleaseProfile(DarwinProfile):
         # self.env.set ('MONO_PATH', '%{staged_prefix}/lib/mono/4.0')
 
     def setup (self):
+        DarwinProfile.setup (self)
         self.mono_package = self.release_packages['mono']
         self.RELEASE_VERSION = self.mono_package.version
         self.prefix = os.path.join(self.MONO_ROOT, "Versions", self.RELEASE_VERSION)

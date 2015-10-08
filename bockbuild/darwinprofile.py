@@ -7,6 +7,22 @@ from profile import Profile
 import stat
 
 class DarwinProfile (UnixProfile):
+
+	# package order is very important.
+	# autoconf and automake don't depend on CC
+	# ccache uses a different CC since it's not installed yet
+	# every thing after ccache needs a working ccache
+
+	toolchain_packages = [
+		'autoconf',
+		'automake',
+		'ccache',
+		'libtool',
+		'gettext',
+		'xz',
+		'tar'
+		]
+
 	def __init__ (self, prefix = None, m64 = False, min_version = 6):
 		UnixProfile.__init__ (self, prefix)
 		
@@ -47,8 +63,6 @@ class DarwinProfile (UnixProfile):
 			self.gcc_flags.extend (['-mmacosx-version-min=%s' % self.target_osx])
 			self.env.set ('MACOSX_DEPLOYMENT_TARGET', self.target_osx)
 		
-		if self.cmd_options.debug is True:
-			self.gcc_flags.extend ([ '-O0', '-ggdb3' ])
 
 		if os.getenv('BOCKBUILD_USE_CCACHE') is None:
 			self.env.set ('CC',  'xcrun gcc')
@@ -57,14 +71,30 @@ class DarwinProfile (UnixProfile):
 			self.env.set ('CC',  'ccache xcrun gcc')
 			self.env.set ('CXX', 'ccache xcrun g++')
 
-		if self.arch == 'default':
-			self.arch = 'darwin-32'
-
 		# GTK2_RC_FILES must be a ":"-seperated list of files (NOT a single folder)
 		self.gtk2_rc_files = os.path.join (os.getcwd (), 'skeleton.darwin', 'Contents', 'Resources', 'etc', 'gtk-2.0', 'gtkrc')
 		self.env.set ('GTK2_RC_FILES', '%{gtk2_rc_files}')
 
-	
+	def setup (self):
+		if self.arch == 'default':
+			self.arch = 'darwin-32'
+			
+		if self.cmd_options.debug is True:
+			self.gcc_flags.extend ([ '-O0', '-ggdb3' ])
+
+		title ('Building toolchain')
+		self.toolchain_packages = collections.OrderedDict()
+
+		ensure_dir (self.toolchain_root, True)
+
+		for source in self.toolchain:
+			package = self.load_package (source, self.toolchain_root, self.resource_root)
+			trace (package)
+			self.toolchain_packages[package.name] = package
+
+		for package in self.toolchain_packages.values ():
+			package.start_build (toolchain_root, toolchain_root)
+		
 	def arch_build (self, arch, package):
 		if arch == 'darwin-universal':
 			package.local_ld_flags = ['-arch i386' , '-arch x86_64']

@@ -1,8 +1,10 @@
 from profile import Profile
+import os
 
 class UnixProfile (Profile):
 	def __init__ (self, prefix = False):
 		Profile.__init__ (self, prefix)
+		self.toolchain_root = os.path.join (self.root, 'toolchain-root')
 		self.name = 'unix'
 
 		self.gcc_flags = ['-I%s/include' % self.staged_prefix]
